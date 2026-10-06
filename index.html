@@ -20,6 +20,7 @@ input,select{width:100%;padding:12px;border:1px solid #d7d9e0;border-radius:10px
 .row{display:flex;gap:9px;align-items:center}.between{display:flex;justify-content:space-between;gap:10px;align-items:center}
 .bill{border:1px solid #e3e5ea;border-radius:13px;padding:13px;margin:9px 0}.bill.overdue{border-color:#ef4444;background:#fff7f7}.bill.soon{border-color:#f59e0b;background:#fffaf0}
 .paid{text-decoration:line-through;opacity:.6}.small{font-size:13px;color:#6b7280}.badge{font-size:12px;padding:4px 8px;border-radius:999px;background:#eee}.good{background:#dcfce7;color:#166534}.warn{background:#fef3c7;color:#92400e}.bad{background:#fee2e2;color:#991b1b}
+.recurring{background:#e0e7ff;color:#3730a3}.notice{background:#eef2ff;color:#3730a3;border-left:4px solid #4f46e5;padding:12px;border-radius:10px;font-size:14px}
 nav{position:fixed;bottom:0;left:0;right:0;background:white;border-top:1px solid #ddd;display:flex;justify-content:center;z-index:3}nav button{flex:1;max-width:190px;background:white;color:#555;border-radius:0;padding:13px 5px}
 nav button.active{color:#4f46e5;font-weight:800}
 section{display:none}section.active{display:block}.empty{text-align:center;color:#777;padding:20px}
@@ -44,6 +45,7 @@ section{display:none}section.active{display:block}.empty{text-align:center;color
     <h2 style="margin:0 0 12px;font-size:19px">Paychecks</h2>
     <div id="paycheckSummary"></div>
   </div>
+  <div class="notice">🔁 Your bills are now recurring. When you move to a new month, the same bills automatically appear with the same amounts and due days. You only need to mark them paid for the new month.</div>
 </section>
 
 <section id="bills">
@@ -63,13 +65,13 @@ section{display:none}section.active{display:block}.empty{text-align:center;color
 <section id="settings">
   <h2 style="margin:0 0 12px">Settings</h2>
   <div class="card">
-    <label class="label">Monthly income (if you prefer one number)</label>
+    <label class="label">Monthly income</label>
     <input id="incomeInput" type="number" min="0" step=".01" placeholder="0">
     <button class="primary" style="margin-top:10px" onclick="saveIncome()">Save income</button>
   </div>
   <div class="card">
     <h3 style="margin-top:0">Data</h3>
-    <p class="small">Your budget is stored locally on this device/browser.</p>
+    <p class="small">Your budget is stored locally on this device/browser. Use Export Backup periodically.</p>
     <div class="row"><button class="secondary" onclick="exportData()">Export backup</button><button class="danger" onclick="clearData()">Clear all data</button></div>
   </div>
 </section>
@@ -107,12 +109,32 @@ let data=JSON.parse(localStorage.getItem(KEY)||'{"income":0,"bills":[],"paycheck
 let selectedMonth=new Date().toISOString().slice(0,7), editId=null;
 
 const $=id=>document.getElementById(id), money=n=>(Number(n)||0).toLocaleString('en-US',{style:'currency',currency:'USD'});
-function save(){localStorage.setItem(KEY,JSON.stringify(data));render();}
-function showTab(t){document.querySelectorAll('section').forEach(s=>s.classList.remove('active'));$(t).classList.add('active');document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));$('nav-'+t).classList.add('active');render();}
-function monthBills(){return data.bills.filter(b=>b.date.slice(0,7)===selectedMonth)}
+function monthDays(y,m){return new Date(y,m,0).getDate()}
+function normalize(){
+  let changed=false;
+  data.bills.forEach(b=>{
+    if(b.recurring===undefined){b.recurring=true;b.day=Number((b.date||'').slice(8,10))||1;b.paidMonths={};if(b.paid)b.paidMonths[(b.date||'').slice(0,7)]=true;changed=true}
+    if(!b.paidMonths)b.paidMonths={};
+    if(!b.day)b.day=Number((b.date||'').slice(8,10))||1;
+    if(b.recurring===true && !b.day)b.day=1;
+  });
+  if(changed)localStorage.setItem(KEY,JSON.stringify(data));
+}
+function save(){localStorage.setItem(KEY,JSON.stringify(data));render()}
+function showTab(t){document.querySelectorAll('section').forEach(s=>s.classList.remove('active'));$(t).classList.add('active');document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));$('nav-'+t).classList.add('active');render()}
+function billInstances(){
+  const [y,m]=selectedMonth.split('-').map(Number), last=monthDays(y,m);
+  return data.bills.map(b=>{
+    if(!b.recurring)return {...b};
+    const day=Math.min(Number(b.day)||1,last);
+    const date=`${selectedMonth}-${String(day).padStart(2,'0')}`;
+    return {...b,instanceId:b.id+'|'+selectedMonth,date,paid:!!b.paidMonths?.[selectedMonth],payId:b.paymentsByMonth?.[selectedMonth]||''};
+  });
+}
 function status(b){if(b.paid)return ['Paid','good'];let d=new Date(b.date+'T12:00:00'), now=new Date();let today=new Date(now.getFullYear(),now.getMonth(),now.getDate());let diff=Math.ceil((d-today)/86400000);if(diff<0)return ['Overdue','bad'];if(diff<=7)return [diff===0?'Due today':'Due in '+diff+'d','warn'];return ['Upcoming',''];}
 function render(){
- let bs=monthBills(), total=bs.reduce((s,b)=>s+Number(b.amount),0), paid=bs.filter(b=>b.paid).reduce((s,b)=>s+Number(b.amount),0);
+ normalize();
+ let bs=billInstances(), total=bs.reduce((s,b)=>s+Number(b.amount),0), paid=bs.filter(b=>b.paid).reduce((s,b)=>s+Number(b.amount),0);
  $('monthLabel').textContent=new Date(selectedMonth+'-01T12:00:00').toLocaleDateString('en-US',{month:'long',year:'numeric'});
  $('incomeStat').textContent=money(data.income);$('billsStat').textContent=money(total);$('paidStat').textContent=money(paid);$('leftStat').textContent=money(data.income-total);
  $('monthPicker').value=selectedMonth;$('incomeInput').value=data.income||'';
@@ -123,19 +145,32 @@ function render(){
  $('payList').innerHTML=ps.length?ps.map(p=>`<div class="card"><div class="between"><div><b>${p.name||'Paycheck'}</b><div class="small">${new Date(p.date+'T12:00:00').toLocaleDateString()}</div></div><b>${money(p.amount)}</b></div><button class="danger" style="margin-top:9px" onclick="deletePay('${p.id}')">Delete</button></div>`).join(''):'<div class="card empty">No paychecks entered.</div>';
  $('paycheckSummary').innerHTML=ps.length?ps.map(p=>{let due=bs.filter(b=>!b.paid&&b.payId===p.id).reduce((s,b)=>s+Number(b.amount),0);return `<div class="between" style="padding:8px 0;border-bottom:1px solid #eee"><span>${new Date(p.date+'T12:00:00').toLocaleDateString()}<br><span class="small">Bills assigned: ${money(due)}</span></span><b>${money(p.amount-due)} left</b></div>`}).join(''):'<span class="small">Add your paychecks to see how much each one needs to cover.</span>';
 }
-function billHTML(b){let [st,cl]=status(b);return `<div class="bill ${cl==='bad'?'overdue':cl==='warn'?'soon':''}"><div class="between"><div><b class="${b.paid?'paid':''}">${b.name}</b><div class="small">${new Date(b.date+'T12:00:00').toLocaleDateString()} · ${b.auto==='Yes'?'Autopay':'Manual'}</div></div><div style="text-align:right"><b>${money(b.amount)}</b><br><span class="badge ${cl}">${st}</span></div></div><div class="row" style="margin-top:10px"><button class="${b.paid?'secondary':'primary'}" onclick="togglePaid('${b.id}')">${b.paid?'Mark unpaid':'Mark paid'}</button><button class="secondary" onclick="editBill('${b.id}')">Edit</button><button class="danger" onclick="deleteBill('${b.id}')">Delete</button></div></div>`}
-function openBillForm(id=null){editId=id;$('modal').style.display='block';$('billForm').style.display='block';$('payForm').style.display='none';$('modalTitle').textContent=id?'Edit bill':'Add bill';let b=data.bills.find(x=>x.id===id);$('bName').value=b?.name||'';$('bAmount').value=b?.amount||'';$('bDate').value=b?.date||selectedMonth+'-01';$('bAuto').value=b?.auto||'No';fillPaySelect(b?.payId);}
-function fillPaySelect(selected){let ps=data.paychecks.filter(p=>p.date.slice(0,7)===selectedMonth);$('bPay').innerHTML='<option value=\"\">Choose paycheck</option>'+ps.map(p=>`<option value=\"${p.id}\" ${p.id===selected?'selected':''}>${new Date(p.date+'T12:00:00').toLocaleDateString()} — ${money(p.amount)}</option>`).join('');}
+function billHTML(b){let [st,cl]=status(b);return `<div class="bill ${cl==='bad'?'overdue':cl==='warn'?'soon':''}"><div class="between"><div><b class="${b.paid?'paid':''}">${b.name}</b><div class="small">${new Date(b.date+'T12:00:00').toLocaleDateString()} · ${b.auto==='Yes'?'Autopay':'Manual'} ${b.recurring?'<span class="badge recurring">Every month</span>':''}</div></div><div style="text-align:right"><b>${money(b.amount)}</b><br><span class="badge ${cl}">${st}</span></div></div><div class="row" style="margin-top:10px"><button class="${b.paid?'secondary':'primary'}" onclick="togglePaid('${b.id}')">${b.paid?'Mark unpaid':'Mark paid'}</button><button class="secondary" onclick="editBill('${b.id}')">Edit</button><button class="danger" onclick="deleteBill('${b.id}')">Delete</button></div></div>`}
+function openBillForm(id=null){
+ editId=id;$('modal').style.display='block';$('billForm').style.display='block';$('payForm').style.display='none';$('modalTitle').textContent=id?'Edit bill':'Add bill';
+ let b=data.bills.find(x=>x.id===id);$('bName').value=b?.name||'';$('bAmount').value=b?.amount||'';$('bDate').value=b?.date||selectedMonth+'-01';$('bAuto').value=b?.auto||'No';fillPaySelect(b?.paymentsByMonth?.[selectedMonth]||b?.payId||'');
+}
+function fillPaySelect(selected){let ps=data.paychecks.filter(p=>p.date.slice(0,7)===selectedMonth);$('bPay').innerHTML='<option value="">Choose paycheck</option>'+ps.map(p=>`<option value="${p.id}" ${p.id===selected?'selected':''}>${new Date(p.date+'T12:00:00').toLocaleDateString()} — ${money(p.amount)}</option>`).join('');}
 function openPayForm(){$('modal').style.display='block';$('billForm').style.display='none';$('payForm').style.display='block';$('modalTitle').textContent='Add paycheck';$('pDate').value=selectedMonth+'-01';$('pAmount').value='';$('pName').value='Paycheck';}
 function closeModal(){$('modal').style.display='none'}
-$('billForm').addEventListener('submit',e=>{e.preventDefault();let b={id:editId||crypto.randomUUID(),name:$('bName').value.trim(),amount:Number($('bAmount').value)||0,date:$('bDate').value,payId:$('bPay').value,auto:$('bAuto').value,paid:editId?data.bills.find(x=>x.id===editId).paid:false};if(editId){let i=data.bills.findIndex(x=>x.id===editId);data.bills[i]=b}else data.bills.push(b);closeModal();save()});
+$('billForm').addEventListener('submit',e=>{
+ e.preventDefault();
+ let old=editId?data.bills.find(x=>x.id===editId):null;
+ let date=$('bDate').value, day=Number(date.slice(8,10))||1;
+ let b={id:editId||crypto.randomUUID(),name:$('bName').value.trim(),amount:Number($('bAmount').value)||0,date:date,day,recurring:true,paidMonths:old?.paidMonths||{},paymentsByMonth:old?.paymentsByMonth||{},auto:$('bAuto').value};
+ b.paymentsByMonth[selectedMonth]=$('bPay').value;
+ if(editId){let i=data.bills.findIndex(x=>x.id===editId);data.bills[i]=b}else data.bills.push(b);
+ closeModal();save()
+});
 $('payForm').addEventListener('submit',e=>{e.preventDefault();data.paychecks.push({id:crypto.randomUUID(),date:$('pDate').value,amount:Number($('pAmount').value)||0,name:$('pName').value.trim()});closeModal();save()});
 $('monthPicker').addEventListener('change',e=>{selectedMonth=e.target.value;render()});
-function togglePaid(id){let b=data.bills.find(x=>x.id===id);b.paid=!b.paid;save()}function editBill(id){openBillForm(id)}function deleteBill(id){if(confirm('Delete this bill?')){data.bills=data.bills.filter(b=>b.id!==id);save()}}function deletePay(id){if(confirm('Delete this paycheck?')){data.paychecks=data.paychecks.filter(p=>p.id!==id);save()}}
+function togglePaid(id){let b=data.bills.find(x=>x.id===id);if(!b.paidMonths)b.paidMonths={};b.paidMonths[selectedMonth]=!b.paidMonths[selectedMonth];save()}
+function editBill(id){openBillForm(id)}
+function deleteBill(id){if(confirm('Delete this recurring bill? It will stop appearing in future months.')){data.bills=data.bills.filter(b=>b.id!==id);save()}}
+function deletePay(id){if(confirm('Delete this paycheck?')){data.paychecks=data.paychecks.filter(p=>p.id!==id);save()}}
 function saveIncome(){data.income=Number($('incomeInput').value)||0;save()}
-function exportData(){let blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='my-budget-backup.json';a.click();URL.revokeObjectURL(a.href)}
+function exportData(){let blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='my-budget-backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 function clearData(){if(confirm('This will erase all budget data on this device. Continue?')){data={income:0,bills:[],paychecks:[]};save()}}
-if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
-render();
+normalize();if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});render();
 </script>
 </body></html>
