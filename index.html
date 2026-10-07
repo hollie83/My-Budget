@@ -57,6 +57,12 @@ section{display:none}section.active{display:block}.empty{text-align:center;color
   <div id="billList"></div>
 </section>
 
+<section id="income">
+  <div class="between" style="margin-bottom:12px"><h2 style="margin:0">Extra Income</h2><button class="primary" onclick="openIncomeForm()">+ Add income</button></div>
+  <div class="card"><div class="small">Add money from reselling, Bee, side jobs, gifts, or other income. Choose whether it happens once or repeats every month.</div></div>
+  <div id="incomeList"></div>
+</section>
+
 <section id="paychecks">
   <div class="between" style="margin-bottom:12px"><h2 style="margin:0">Paychecks</h2><button class="primary" onclick="openPayForm()">+ Add</button></div>
   <div id="payList"></div>
@@ -80,6 +86,7 @@ section{display:none}section.active{display:block}.empty{text-align:center;color
 <nav>
 <button id="nav-dashboard" class="active" onclick="showTab('dashboard')">🏠<br><span>Home</span></button>
 <button id="nav-bills" onclick="showTab('bills')">🧾<br><span>Bills</span></button>
+<button id="nav-income" onclick="showTab('income')">➕<br><span>Income</span></button>
 <button id="nav-paychecks" onclick="showTab('paychecks')">💵<br><span>Paychecks</span></button>
 <button id="nav-settings" onclick="showTab('settings')">⚙️<br><span>Settings</span></button>
 </nav>
@@ -92,8 +99,25 @@ section{display:none}section.active{display:block}.empty{text-align:center;color
 <label class="label">Amount</label><input id="bAmount" required type="number" min="0" step=".01" inputmode="decimal">
 <label class="label">Due date</label><input id="bDate" required type="date">
 <label class="label">Paycheck to use</label><select id="bPay"></select>
+<label class="label">Bill repeats?</label>
+<select id="bRecurring" onchange="updateBillFrequencyFields()">
+<option value="No">No — one time</option>
+<option value="Monthly">Once a month</option>
+<option value="TwiceMonthly">2 times a month</option>
+<option value="Weekly">Weekly</option>
+</select>
+<div id="monthlyFields"><label class="label">Day of month</label><input id="bDay1" type="number" min="1" max="31" placeholder="e.g. 5"></div>
+<div id="twiceFields" style="display:none"><label class="label">First day of month</label><input id="bDay1Twice" type="number" min="1" max="31" placeholder="e.g. 1"><label class="label">Second day of month</label><input id="bDay2Twice" type="number" min="1" max="31" placeholder="e.g. 15"></div>
+<div id="weeklyFields" style="display:none"><label class="label">Day of week</label><select id="bWeekday"><option value="0">Sunday</option><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option></select></div>
 <label class="label">Autopay?</label><select id="bAuto"><option>No</option><option>Yes</option></select>
 <div class="row" style="margin-top:14px"><button class="primary" type="submit">Save bill</button><button type="button" onclick="closeModal()">Cancel</button></div>
+</form>
+<form id="incomeForm" style="display:none;margin-top:15px">
+<label class="label">Income source</label><input id="iName" required placeholder="Reselling, Bee, side job...">
+<label class="label">Amount</label><input id="iAmount" required type="number" min="0" step=".01">
+<label class="label">Date</label><input id="iDate" required type="date">
+<label class="label">Repeat every month?</label><select id="iRecurring"><option value="No">No — one time</option><option value="Yes">Yes — repeat monthly</option></select>
+<div class="row" style="margin-top:14px"><button class="primary" type="submit">Save income</button><button type="button" onclick="closeModal()">Cancel</button></div>
 </form>
 <form id="payForm" style="display:none;margin-top:15px">
 <label class="label">Paycheck date</label><input id="pDate" required type="date">
@@ -105,12 +129,12 @@ section{display:none}section.active{display:block}.empty{text-align:center;color
 
 <script>
 const KEY='myBudgetV1';
-let data=JSON.parse(localStorage.getItem(KEY)||'{"income":0,"bills":[],"paychecks":[]}');
+let data=JSON.parse(localStorage.getItem(KEY)||'{"income":0,"bills":[],"paychecks":[],"extraIncome":[]}'); data.extraIncome=data.extraIncome||[];
 let selectedMonth=new Date().toISOString().slice(0,7), editId=null;
 
 const $=id=>document.getElementById(id), money=n=>(Number(n)||0).toLocaleString('en-US',{style:'currency',currency:'USD'});
 function monthDays(y,m){return new Date(y,m,0).getDate()}
-function normalize(){
+function normalize(){data.bills.forEach(b=>{if(b.recurring!==false&&!b.frequency){b.frequency='Monthly';b.day1=Number(b.day||((b.date||'').slice(8,10))||1)}});
   let changed=false;
   data.bills.forEach(b=>{
     if(b.recurring===undefined){b.recurring=true;b.day=Number((b.date||'').slice(8,10))||1;b.paidMonths={};if(b.paid)b.paidMonths[(b.date||'').slice(0,7)]=true;changed=true}
@@ -123,21 +147,40 @@ function normalize(){
 function save(){localStorage.setItem(KEY,JSON.stringify(data));render()}
 function showTab(t){document.querySelectorAll('section').forEach(s=>s.classList.remove('active'));$(t).classList.add('active');document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));$('nav-'+t).classList.add('active');render()}
 function billInstances(){
-  const [y,m]=selectedMonth.split('-').map(Number), last=monthDays(y,m);
-  return data.bills.map(b=>{
-    if(!b.recurring)return {...b};
-    const day=Math.min(Number(b.day)||1,last);
-    const date=`${selectedMonth}-${String(day).padStart(2,'0')}`;
-    return {...b,instanceId:b.id+'|'+selectedMonth,date,paid:!!b.paidMonths?.[selectedMonth],payId:b.paymentsByMonth?.[selectedMonth]||''};
+  const [y,m]=selectedMonth.split('-').map(Number), last=monthDays(y,m), out=[];
+  data.bills.forEach(b=>{
+    const f=b.frequency || (b.recurring===false?'No':'Monthly');
+    if(f==='No'){
+      if(b.date?.slice(0,7)===selectedMonth) out.push({...b,instanceId:b.id,paid:!!b.paidMonths?.[selectedMonth],payId:b.paymentsByMonth?.[selectedMonth]||''});
+      return;
+    }
+    let days=[];
+    if(f==='Monthly') days=[Math.min(Number(b.day1||b.day||1),last)];
+    else if(f==='TwiceMonthly'){
+      const a=Math.min(Number(b.day1||1),last), c=Math.min(Number(b.day2||15),last);
+      days=[a]; if(c!==a) days.push(c);
+    } else if(f==='Weekly'){
+      const target=Number(b.weekday||0), first=new Date(y,m-1,1,12), offset=(target-first.getDay()+7)%7;
+      for(let d=1+offset;d<=last;d+=7) days.push(d);
+    }
+    days.forEach((day,idx)=>{
+      const date=`${selectedMonth}-${String(day).padStart(2,'0')}`, key=b.id+'|'+selectedMonth+'|'+idx;
+      out.push({...b,instanceId:key,date,paid:!!b.paidInstances?.[key],payId:b.paymentsByInstance?.[key]||''});
+    });
   });
+  return out;
 }
 function status(b){if(b.paid)return ['Paid','good'];let d=new Date(b.date+'T12:00:00'), now=new Date();let today=new Date(now.getFullYear(),now.getMonth(),now.getDate());let diff=Math.ceil((d-today)/86400000);if(diff<0)return ['Overdue','bad'];if(diff<=7)return [diff===0?'Due today':'Due in '+diff+'d','warn'];return ['Upcoming',''];}
 function render(){
  normalize();
  let bs=billInstances(), total=bs.reduce((s,b)=>s+Number(b.amount),0), paid=bs.filter(b=>b.paid).reduce((s,b)=>s+Number(b.amount),0);
+ let extraTotal=(data.extraIncome||[]).filter(x=>x.recurring||x.date?.slice(0,7)===selectedMonth).reduce((s,x)=>s+Number(x.amount),0);
+ let monthIncome=Number(data.income||0)+extraTotal;
  $('monthLabel').textContent=new Date(selectedMonth+'-01T12:00:00').toLocaleDateString('en-US',{month:'long',year:'numeric'});
- $('incomeStat').textContent=money(data.income);$('billsStat').textContent=money(total);$('paidStat').textContent=money(paid);$('leftStat').textContent=money(data.income-total);
+ $('incomeStat').textContent=money(monthIncome);$('billsStat').textContent=money(total);$('paidStat').textContent=money(paid);$('leftStat').textContent=money(data.income-total);
  $('monthPicker').value=selectedMonth;$('incomeInput').value=data.income||'';
+ let extras=(data.extraIncome||[]).filter(x=>x.recurring||x.date?.slice(0,7)===selectedMonth).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+ $('incomeList').innerHTML=extras.length?extras.map(x=>`<div class="card"><div class="between"><div><b>${x.name}</b><div class="small">${x.recurring?'Every month':'One time'} · ${x.date?new Date(x.date+'T12:00:00').toLocaleDateString():''}</div></div><b>${money(x.amount)}</b></div><button class="danger" style="margin-top:9px" onclick="deleteExtraIncome('${x.id}')">Delete</button></div>`).join(''):'<div class="card empty">No extra income for this month.</div>';
  let upcoming=bs.filter(b=>!b.paid).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,5);
  $('nextBills').innerHTML=upcoming.length?upcoming.map(billHTML).join(''):'<div class="empty">No unpaid bills this month 🎉</div>';
  $('billList').innerHTML=bs.length?bs.sort((a,b)=>a.date.localeCompare(b.date)).map(billHTML).join(''):'<div class="card empty">No bills yet. Tap “+ Add bill”.</div>';
@@ -145,26 +188,34 @@ function render(){
  $('payList').innerHTML=ps.length?ps.map(p=>`<div class="card"><div class="between"><div><b>${p.name||'Paycheck'}</b><div class="small">${new Date(p.date+'T12:00:00').toLocaleDateString()}</div></div><b>${money(p.amount)}</b></div><button class="danger" style="margin-top:9px" onclick="deletePay('${p.id}')">Delete</button></div>`).join(''):'<div class="card empty">No paychecks entered.</div>';
  $('paycheckSummary').innerHTML=ps.length?ps.map(p=>{let due=bs.filter(b=>!b.paid&&b.payId===p.id).reduce((s,b)=>s+Number(b.amount),0);return `<div class="between" style="padding:8px 0;border-bottom:1px solid #eee"><span>${new Date(p.date+'T12:00:00').toLocaleDateString()}<br><span class="small">Bills assigned: ${money(due)}</span></span><b>${money(p.amount-due)} left</b></div>`}).join(''):'<span class="small">Add your paychecks to see how much each one needs to cover.</span>';
 }
-function billHTML(b){let [st,cl]=status(b);return `<div class="bill ${cl==='bad'?'overdue':cl==='warn'?'soon':''}"><div class="between"><div><b class="${b.paid?'paid':''}">${b.name}</b><div class="small">${new Date(b.date+'T12:00:00').toLocaleDateString()} · ${b.auto==='Yes'?'Autopay':'Manual'} ${b.recurring?'<span class="badge recurring">Every month</span>':''}</div></div><div style="text-align:right"><b>${money(b.amount)}</b><br><span class="badge ${cl}">${st}</span></div></div><div class="row" style="margin-top:10px"><button class="${b.paid?'secondary':'primary'}" onclick="togglePaid('${b.id}')">${b.paid?'Mark unpaid':'Mark paid'}</button><button class="secondary" onclick="editBill('${b.id}')">Edit</button><button class="danger" onclick="deleteBill('${b.id}')">Delete</button></div></div>`}
+function billHTML(b){let [st,cl]=status(b);return `<div class="bill ${cl==='bad'?'overdue':cl==='warn'?'soon':''}"><div class="between"><div><b class="${b.paid?'paid':''}">${b.name}</b><div class="small">${new Date(b.date+'T12:00:00').toLocaleDateString()} · ${b.auto==='Yes'?'Autopay':'Manual'} ${b.frequency==='Weekly'?'<span class="badge recurring">Weekly</span>':b.frequency==='TwiceMonthly'?'<span class="badge recurring">2× monthly</span>':b.recurring?'<span class="badge recurring">Monthly</span>':'<span class="badge">One time</span>'}</div></div><div style="text-align:right"><b>${money(b.amount)}</b><br><span class="badge ${cl}">${st}</span></div></div><div class="row" style="margin-top:10px"><button class="${b.paid?'secondary':'primary'}" onclick="togglePaid('${b.instanceId}')">${b.paid?'Mark unpaid':'Mark paid'}</button><button class="secondary" onclick="editBill('${b.id}')">Edit</button><button class="danger" onclick="deleteBill('${b.id}')">Delete</button></div></div>`}
+function updateBillFrequencyFields(){const f=$('bRecurring').value;$('monthlyFields').style.display=f==='Monthly'?'block':'none';$('twiceFields').style.display=f==='TwiceMonthly'?'block':'none';$('weeklyFields').style.display=f==='Weekly'?'block':'none'}
 function openBillForm(id=null){
- editId=id;$('modal').style.display='block';$('billForm').style.display='block';$('payForm').style.display='none';$('modalTitle').textContent=id?'Edit bill':'Add bill';
- let b=data.bills.find(x=>x.id===id);$('bName').value=b?.name||'';$('bAmount').value=b?.amount||'';$('bDate').value=b?.date||selectedMonth+'-01';$('bAuto').value=b?.auto||'No';fillPaySelect(b?.paymentsByMonth?.[selectedMonth]||b?.payId||'');
+ editId=id;$('modal').style.display='block';$('billForm').style.display='block';$('incomeForm').style.display='none';$('payForm').style.display='none';$('modalTitle').textContent=id?'Edit bill':'Add bill';
+ let b=data.bills.find(x=>x.id===id);$('bName').value=b?.name||'';$('bAmount').value=b?.amount||'';$('bDate').value=b?.date||selectedMonth+'-01';$('bRecurring').value=b?.frequency || (b?.recurring===false?'No':'Monthly');
+$('bDay1').value=b?.day1||((b?.date||selectedMonth+'-01').slice(8,10));
+$('bDay1Twice').value=b?.day1||1;$('bDay2Twice').value=b?.day2||15;$('bWeekday').value=b?.weekday??0;
+$('bAuto').value=b?.auto||'No';updateBillFrequencyFields();fillPaySelect(b?.paymentsByMonth?.[selectedMonth]||b?.payId||'');
 }
 function fillPaySelect(selected){let ps=data.paychecks.filter(p=>p.date.slice(0,7)===selectedMonth);$('bPay').innerHTML='<option value="">Choose paycheck</option>'+ps.map(p=>`<option value="${p.id}" ${p.id===selected?'selected':''}>${new Date(p.date+'T12:00:00').toLocaleDateString()} — ${money(p.amount)}</option>`).join('');}
-function openPayForm(){$('modal').style.display='block';$('billForm').style.display='none';$('payForm').style.display='block';$('modalTitle').textContent='Add paycheck';$('pDate').value=selectedMonth+'-01';$('pAmount').value='';$('pName').value='Paycheck';}
+function openIncomeForm(){$('modal').style.display='block';$('billForm').style.display='none';$('incomeForm').style.display='block';$('payForm').style.display='none';$('modalTitle').textContent='Add extra income';$('iDate').value=selectedMonth+'-01';$('iAmount').value='';$('iName').value='';$('iRecurring').value='No'}
+function deleteExtraIncome(id){if(confirm('Delete this extra income entry?')){data.extraIncome=data.extraIncome.filter(x=>x.id!==id);save()}}
+function openPayForm(){$('modal').style.display='block';$('billForm').style.display='none';$('incomeForm').style.display='none';$('payForm').style.display='block';$('modalTitle').textContent='Add paycheck';$('pDate').value=selectedMonth+'-01';$('pAmount').value='';$('pName').value='Paycheck';}
 function closeModal(){$('modal').style.display='none'}
 $('billForm').addEventListener('submit',e=>{
  e.preventDefault();
  let old=editId?data.bills.find(x=>x.id===editId):null;
  let date=$('bDate').value, day=Number(date.slice(8,10))||1;
- let b={id:editId||crypto.randomUUID(),name:$('bName').value.trim(),amount:Number($('bAmount').value)||0,date:date,day,recurring:true,paidMonths:old?.paidMonths||{},paymentsByMonth:old?.paymentsByMonth||{},auto:$('bAuto').value};
+ let frequency=$('bRecurring').value, recurring=frequency!=='No', day1=Number($('bDay1').value)||Number(date.slice(8,10))||1, day2=Number($('bDay2Twice').value)||15, weekday=Number($('bWeekday').value)||0;
+ let b={id:editId||crypto.randomUUID(),name:$('bName').value.trim(),amount:Number($('bAmount').value)||0,date:date,day:day1,day1,day2,weekday,frequency,recurring,paidMonths:old?.paidMonths||{},paymentsByMonth:old?.paymentsByMonth||{},paidInstances:old?.paidInstances||{},paymentsByInstance:old?.paymentsByInstance||{},auto:$('bAuto').value};
  b.paymentsByMonth[selectedMonth]=$('bPay').value;
  if(editId){let i=data.bills.findIndex(x=>x.id===editId);data.bills[i]=b}else data.bills.push(b);
  closeModal();save()
 });
+$('incomeForm').addEventListener('submit',e=>{e.preventDefault();data.extraIncome=data.extraIncome||[];data.extraIncome.push({id:crypto.randomUUID(),name:$('iName').value.trim(),amount:Number($('iAmount').value)||0,date:$('iDate').value,recurring:$('iRecurring').value==='Yes'});closeModal();save()});
 $('payForm').addEventListener('submit',e=>{e.preventDefault();data.paychecks.push({id:crypto.randomUUID(),date:$('pDate').value,amount:Number($('pAmount').value)||0,name:$('pName').value.trim()});closeModal();save()});
 $('monthPicker').addEventListener('change',e=>{selectedMonth=e.target.value;render()});
-function togglePaid(id){let b=data.bills.find(x=>x.id===id);if(!b.paidMonths)b.paidMonths={};b.paidMonths[selectedMonth]=!b.paidMonths[selectedMonth];save()}
+function togglePaid(instanceId){let inst=billInstances().find(x=>x.instanceId===instanceId);if(!inst)return;let b=data.bills.find(x=>x.id===inst.id);if(!b.paidInstances)b.paidInstances={};b.paidInstances[instanceId]=!b.paidInstances[instanceId];save()}
 function editBill(id){openBillForm(id)}
 function deleteBill(id){if(confirm('Delete this recurring bill? It will stop appearing in future months.')){data.bills=data.bills.filter(b=>b.id!==id);save()}}
 function deletePay(id){if(confirm('Delete this paycheck?')){data.paychecks=data.paychecks.filter(p=>p.id!==id);save()}}
